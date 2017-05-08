@@ -1,0 +1,21 @@
+dos2unix |
+awk '
+BEGIN { Q = "'"'"'"
+}
+$1 == "function" && $2 == "[p,z]" && $3 == "=" {
+	k = index($0,"(")
+	s = k > 0 ? substr($0,k) : "()"
+	printf("%s %s%s\n", $1, $4, s)
+	next
+}
+$0 !~ Q	{
+	gsub("%", "#")
+}
+{
+	sub("fprintf[(]", "@printf(")
+	gsub(Q, "\"")
+	sub("[.][.][.]\\s*$", "")
+	sub("[;]\\s*$", "")
+}
+1
+'

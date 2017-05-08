@@ -1,0 +1,3 @@
+
+
+/usr/share/julia/julia-config.jl --ldlibs --cflags --ldflags | xargs gcc embed-example.c -o embed-example

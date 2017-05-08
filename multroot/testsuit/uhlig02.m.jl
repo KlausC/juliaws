@@ -1,0 +1,24 @@
+function uhlig02()
+#
+#  test polynomial used by F. Uhlig
+#
+   a = 0.001;
+   p1 = [1,0,0,0,-a^4];
+   p2 = poly([a,a,a,a]);
+   p = conv(p1,p2);
+   z = [ -0.00000000000000 + 0.00100000000000i
+ -0.00000000000000 - 0.00100000000000i
+ -0.00100000000000 + 0.00000000000000i
+  0.00100000000000 + 0.00000000000000i];
+   z = [z, [1,1,1,5]'];
+   if norm(imag(z(:,1))) == 0 
+        @printf("                 roots         multiplicities\n");
+        @printf("\n");
+        @printf("%25.15f \t \t \t %3g \n", z');
+    else
+        @printf("                 roots ")
+        @printf("   \t\t\t\t\t\t     multiplicities\n");
+        @printf("\n");
+        @printf("%22.15f + %22.15f i \t \t %3g \n",             [real(z(:,1)),imag(z(:,1)),z(:,2)]');
+    end;    p,z
+end

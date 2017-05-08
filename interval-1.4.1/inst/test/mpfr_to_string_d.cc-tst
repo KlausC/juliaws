@@ -1,0 +1,5 @@
+## DO NOT EDIT!  Generated automatically from src/mpfr_to_string_d.cc
+%!test;
+%!  [s, isexact] = mpfr_to_string_d (-inf, "decimal", .1);
+%!  assert (s, {"0.1"});
+%!  assert (isexact, false);
