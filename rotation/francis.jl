@@ -37,8 +37,6 @@ function transform_Hess!{T<:Real, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, 
   # Any shifts provided
   if m > 0
 
-    println("before initial chase m = $m"); display(A)
-
     # First step: shift bulges blocking the undisturbed insertion
     if isize > 4
       i0, m0 = lastbulge(A, ilo, ihi, m + 1)
@@ -47,7 +45,6 @@ function transform_Hess!{T<:Real, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, 
       end
     end
 
-    println("after initial chase m = $m"); display(A)
     # Second step: compute  prod(A-s(k))e1
     pe = zeros(T, n)
     pe[ilo] = one(T)
@@ -79,13 +76,9 @@ function transform_Hess!{T<:Real, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, 
       A_mul_Bc!(Q, G)
     end
   end
-  # println("m = $m") 
-  # display(A)
 
   # Forth step: chase all remaining bulks, oldest first
   if maxchase > 0
-    display(A)
-    println("chase rem")
     chase!(A, ilo, ihi, Q, maxchase)
   end
   ilo, ihi, Q
@@ -140,7 +133,7 @@ function chase!(A, ilo::Integer, ihi::Integer, Q, maxchase)
 
   while i0 >= ilo && m > 0
     i0, m = lastbulge(A, ilo, ihi, i0 - 1)
-    println("i0 = $i0, m = $m, ilo = $ilo  ihi = $ihi")
+
     if m > 0
       for  i = i0:min(i0 + maxchase - 1, n2 - 2)
         for k = min(i+m+1,n1):-1:i+2
@@ -152,8 +145,6 @@ function chase!(A, ilo::Integer, ihi::Integer, Q, maxchase)
             A[k-1,i] = r
             A[k,i] = 0
           end
-          println("after i = $i k = $k")
-          display(A)
         end
       end
     end
@@ -162,7 +153,7 @@ function chase!(A, ilo::Integer, ihi::Integer, Q, maxchase)
 end
 
 """
-Find last bulge start column and size
+Find last bulge start column and size. Start search in column i.
 """
 function lastbulge{T<:Number}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, i::Integer)
   n, m = size(A)
@@ -186,15 +177,15 @@ function lastbulge{T<:Number}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, 
 end
 
 """
-Find estimations for eigenvalues from lower right.
+Find estimations for eigenvalues from lower right of Hessenberg matrix.
 """
 function estimations!(A::AbstractMatrix, ilo::Integer, ihi::Integer, Q::AbstractM, isize::Integer)
   n, m = size(A)
   n == m || error("square Matrix required")
-  n = min(n, ihi)
-  1 <= isize <= n || error("submatrix not ok")
-  ni = max(ilo-1, n - isize)
-  isize = ihi - ilo
+  ihi = min(n, ihi)
+  1 <= isize <= ihi || error("submatrix not ok")
+  ni = max(ilo-1, ihi - isize)
+  isize = ihi - ni
   if isize == 1
     return A
   elseif isize == 2
@@ -202,24 +193,22 @@ function estimations!(A::AbstractMatrix, ilo::Integer, ihi::Integer, Q::Abstract
       return A
     end
   end
-  F = schurfact(view(A, ni+1:n, ni+1:n)) # does not modify A
-  transform!(A, ilo, ihi, Q, F[:Z], ni, ni)
+  ra = ni+1:ihi
+  rb = ihi+1:n
+  F = schurfact(view(A, ra, ra)) # does not modify A
+  FZ = F[:Z]
+  A[ra,ra] = F[:T]
+  A[ra,ni] = FZ' * A[ra,ni]
+  A[ra,rb] = FZ' * A[ra,rb]
+  A[1:ni,ra] = A[1:ni,ra] * FZ
+  Q[:,ra] =  Q[:,ra] * FZ
+  A
 end
 
 """
 Discriminant of 2 x 2 submatrix
 """
 @inline discriminant(A, i, j) = ((A[i,i] - A[j,j]) / 2 ) ^2 + A[i,j] * A[j,i]
-
-
-function transform!(A::AbstractMatrix, ilo::Integer, ihi::Integer, Q::AbstractM, FZ::AbstractMatrix, ni::Integer, mi::Integer)
-  n, m = size(A)
-  n = min(n, ihi)
-  A[ni+1:n, mi:m] = FZ * A[ni+1:n, mi:m]
-  A[ilo:n,mi+1:n] *= FZ' 
-  Q[ilo:n,mi+1:n] *= FZ'
-  A
-end
 
 """
 Deflate elements in first subdiagonal.
@@ -312,15 +301,73 @@ function index_sizes(A::AbstractMatrix, ilo::Integer, iup::Integer)
 end
 
 """
-Perform swap and check if spike vector is improved by the swap.
+Perform swap on copy of small submatrix and check if spike vector is improved by the swap.
+Return true if last component of changed spike vector is small than before.
+and return range of transformation, changed small matrix, transformation matrix.
 """
 function testswap(A::AbstractMatrix, spike::AbstractVector, ilo::Integer, iup::Integer)
   i1, n1, n2 = index_sizes(A, ilo, iup)
-  r = i1:iup
-  is_swap_ok(A[r,r], spike[r], n1, n2)
+  if i1 >= ilo
+    r = i1:iup
+    sp1, sp2, A2, spike2, R = is_swap_ok(A[r,r], spike[r], n1, n2)
+    if sp2 < sp1
+      true, r, A2, spike2, R
+    else
+      return false, r, A2, spike2, R  
+    end
+  else
+    false, i1:i1-1, 0, 0, 0 
+  end
 end
+
+function swap_sweep!(A::AbstractMatrix, ispike::Integer, ilo::Integer, ihi::Integer, Q::AbstractM)
+  n = size(A, 2)
+  i = ihi
+  ilo = max(ilo, ispike + 1)
+  hic = 0
+  loc = n + 1
+  while i >= ilo
+    res, ra, A2, spike2, R = testswap(A, A[:,ispike], ilo, i)
+    println("testswap($ilo,$i): $res $ra $spike2")
+    if res
+      rb = last(ra)+1:n
+      rn = 1:first(ra)-1
+      A[ra,ispike] = spike2
+      A[ra,ra] = A2
+      A[ra,rb] = R' * A[ra,rb]
+      A[rn,ra] = A[rn,ra] * R
+      Q[:,ra] = Q[:,ra] * R
+      loc = first(ra)
+      if hic == 0
+        hic = last(ra)
+        if hic < ihi
+          hic += 1
+          if hic < ihi && A[hic+1,hic] != 0
+            hic += 1
+          end
+        end
+      end
+    end
+    i = first(ra)
+    if i >= ilo
+      if A[i+1,i] != 0
+        i += 1
+      end
+    end
+  end
+  if loc > ispike + 1
+    loc -= 1
+    if loc > ispike + 1 && A[loc,loc-1] != 0
+      loc -= 1
+    end
+  end
+  loc, hic, A, Q
+end
+
+
 """
-A is a n1+n2:n1+n2 matrix, spike a n1+n2 vector.
+A is a n1+n2:n1+n2 Schur matrix, spike a n1+n2 vector. 1 <= n1, n2 <= 2.
+Orthogonally transform A to a Schur matrix with the diagonal eigenvalue blocks swapped.
 """
 function is_swap_ok{T<:Real}(A::AbstractMatrix{T}, spike::AbstractVector{T}, n1::Integer, n2::Integer)
 
@@ -332,7 +379,7 @@ function is_swap_ok{T<:Real}(A::AbstractMatrix{T}, spike::AbstractVector{T}, n1:
   eigs = n1 == 1 ? [ A[1,1] ] : eig2(A)
 
   # swap blocks by repeated rotations
-  # invariant: Agnew = (R' * A) * R
+  # invariant: Anew = (R' * A) * R
   if n == 3
     R = LinAlg.Rotation([g(1, 3)])
     A[:,:] = [ A[3,3] -A[3,2] -A[3,1]; -A[2,3] A[2,2] A[2,1]; -A[1,3] A[1,2] A[1,1]]
