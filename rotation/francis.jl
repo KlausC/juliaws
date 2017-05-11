@@ -236,9 +236,9 @@ function deflate!(A::AbstractMatrix, ilo::Integer, ihi::Integer, isize::Integer)
   n, m = size(A)
   n, m = min(n, ihi), min(m, ihi)
   mi, ni = max(1, m - isize), max(1, n - isize)
-  v = A[ni+1:n, mi]
+  ami = A[mi,mi]
   for k = n:-1:ni+1
-    if deflation_criterion(A[k,mi], A[k,k], A[mi,mi])
+    if deflation_criterion(A[k,mi], A[k,k], ami)
       A[k,mi] = z
       ihi -= 1
     else
@@ -256,18 +256,30 @@ deflation criterion.
 """
 Repeated aggressive deflation steps re-ordering Eigenvalues
 """
-function reorder!(A::AbstractMatrix, ilo::Integer, ihi::Integer, Q::AbstractM, isize::Integer)
-  n = size(A, 1)
-  n = min(n, ihi)
-  ni = n - isize + 1
-  to = ihi
-  while ( (from, n1, to, n2) = lastpairs(A, ni, to); n1 ) > 0
-    swap!(A, ilo, ihi, Q, from, n1, to, n2)
-    ni = from + n2
-    to = ni - 1
+function reorder!{T}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, Q::AbstractM, isize::Integer)
+  estimations!(A, ilo, ihi, Q, isize)
+  ispike = ihi - isize
+  loc, hic = ispike+1, ihi
+  while loc <= hic
+    ihi = deflate!(A, ilo, ihi, isize)
+    hic = min(ihi, hic)
+    loc, hic = swap_sweep!(A, ispike, loc, hic, Q)
   end
-  ihi = deflate!(A, ilo, ihi, isize)
-  ni, ihi
+  ev = seigendiag(A, ispike+1, ihi)
+  transform_Hess!(A, ilo, ihi, Q, zeros(T, 0), ihi)
+  for k = length(ev):-1:1
+    transform_Hess!(A, ilo, ihi, Q, [ev[k]], 1)
+  end
+  transform_Hess!(A, ilo, ihi, Q, zeros(T, 0), ihi)
+  ihi
+end
+
+"""
+Extract eigenvalues from quasi diagonal matrix
+"""
+function seigendiag(A::AbstractMatrix, ilo, ihi)
+  ev = eig(A[ilo:ihi,ilo:ihi])[1]  # TODO replace by specialized eig
+  filter( x -> imag(x) >= 0, ev)
 end
 
 """
