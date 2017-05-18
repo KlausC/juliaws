@@ -15,7 +15,7 @@ shifts is a vector of shift values.
 With each shift value, its conjugate complex value is implicitly used as shift
 All shift values should be distinct.
 """
-function transform_Hess!{T<:Real, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, Q::AbstractM, s::Vector{S}, maxchase::Integer)
+function transform_Hess!{T<:Real, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, Q::AbstractM, s::Vector{S}, maxchase::Integer, iwindow::Integer)
 
   !isa(Q, AbstractMatrix) || size(A, 2) == size(Q, 2) || error("A and Q have incompatible sizes")
   n, m = size(A)
@@ -41,7 +41,7 @@ function transform_Hess!{T<:Real, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, 
     if isize > 4
       i0, m0 = lastbulge(A, ilo, ihi, m + 1)
       if i0 > 0
-        chase!(A, ilo, ihi, Q, m + 2 - i0)
+        chase!(A, ilo, ihi, Q, m + 2 - i0, iwindow)
       end
     end
 
@@ -79,21 +79,21 @@ function transform_Hess!{T<:Real, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, 
 
   # Forth step: chase all remaining bulks, oldest first
   if maxchase > 0
-    chase!(A, ilo, ihi, Q, maxchase)
+    chase!(A, ilo, ihi, Q, maxchase, iwindow)
   end
   ilo, ihi, Q
 end
 
-function transform_Hess!{T<:Real, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, Q::AbstractM, s::Vector{S}, maxchase::Integer)
+function transform_Hess!{T<:Real, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, Q::AbstractM, s::Vector{S}, maxchase::Integer, iwindow::Integer = 0)
 
-  transform_Hess!(A, 1, size(A, 1), Q, s, maxchase)
+  transform_Hess!(A, 1, size(A, 1), Q, s, maxchase, iwindow)
 end
 
-function transform_Hess!{T<:Real, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, s::Vector{S}, maxchase::Integer)
+function transform_Hess!{T<:Real, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, s::Vector{S}, maxchase::Integer, iwindow::Integer = 0)
 
   #Q = LinAlg.Rotation(LinAlg.Givens{T}[])
   Q = eye(T, size(A, 2))
-  transform_Hess!(A, Q, s, maxchase)
+  transform_Hess!(A, Q, s, maxchase, iwindow)
 end
 
 """
@@ -125,7 +125,7 @@ end
 """
 Chase all bulges towards right lower corner
 """
-function chase!(A, ilo::Integer, ihi::Integer, Q, maxchase)
+function chase!(A, ilo::Integer, ihi::Integer, Q, maxchase::Integer, iwindow::Integer)
   n1, n2 = size(A)
   n2 = min(ihi, n2)
   n1 = min(ihi, n1)
@@ -135,6 +135,7 @@ function chase!(A, ilo::Integer, ihi::Integer, Q, maxchase)
     i0, m = lastbulge(A, ilo, ihi, i0 - 1)
 
     if m > 0
+      i1 = i0 + m > ihi -iwindow ? n2 - 2 : min(i0 + maxchase - 1, n2 - 2)
       for  i = i0:min(i0 + maxchase - 1, n2 - 2)
         for k = min(i+m+1,n1):-1:i+2
           if A[k,i] != 0
@@ -179,30 +180,38 @@ end
 """
 Find estimations for eigenvalues from lower right of Hessenberg matrix.
 """
-function estimations!(A::AbstractMatrix, ilo::Integer, ihi::Integer, Q::AbstractM, isize::Integer)
+function estimations!(A::AbstractMatrix, ilo::Integer, ihi::Integer, Q::AbstractM, iwindow::Integer)
   n, m = size(A)
   n == m || error("square Matrix required")
   ihi = min(n, ihi)
-  1 <= isize <= ihi || error("submatrix not ok")
-  ni = max(ilo-1, ihi - isize)
-  isize = ihi - ni
-  if isize == 1
+  1 <= iwindow <= ihi || error("submatrix not ok")
+  ni = max(ilo-1, ihi - iwindow)
+  iwindow = ihi - ni
+  if iwindow == 1
     return A
-  elseif isize == 2
+  elseif iwindow == 2
     if discriminant(A, ihi-1, ihi) < 0
       return A
     end
   end
   ra = ni+1:ihi
   rb = ihi+1:n
-  F = schurfact(view(A, ra, ra)) # does not modify A
-  FZ = F[:Z]
-  A[ra,ra] = F[:T]
-  A[ra,ni] = FZ' * A[ra,ni]
+  A[ra,ra], FZ = smalleig(view(A, ra, ra))
+  if ni >= ilo
+    A[ra,ni] = FZ' * A[ra,ni]
+  end
   A[ra,rb] = FZ' * A[ra,rb]
   A[1:ni,ra] = A[1:ni,ra] * FZ
   Q[:,ra] =  Q[:,ra] * FZ
   A
+end
+
+"""
+Provide schur matrix and transformation for small matrix
+"""
+function smalleig(A::AbstractArray)
+  F = schurfact(A)
+  F[:T], F[:Z]
 end
 
 """
@@ -231,55 +240,108 @@ end
 Early aggressive defaltion step without re-ordering
 Return new upper index.
 """
-function deflate!(A::AbstractMatrix, ilo::Integer, ihi::Integer, isize::Integer)
+function deflate!(A::AbstractMatrix, ilo::Integer, ihi::Integer, ispike::Integer)
   z = zero(eltype(A))
-  n, m = size(A)
-  n, m = min(n, ihi), min(m, ihi)
-  mi, ni = max(1, m - isize), max(1, n - isize)
-  ami = A[mi,mi]
-  for k = n:-1:ni+1
-    if deflation_criterion(A[k,mi], A[k,k], ami)
-      A[k,mi] = z
-      ihi -= 1
-    else
-      break
+  n = min(size(A, 1), ihi)
+  k = n
+  ni = ispike
+  if deflation_criterion1(abs(A[ilo+1,ilo]), abs(A[ilo,ilo]))
+    A[ilo+1,ilo] = z
+    ilo += 1
+    println("deflate at top: new ilo = $ilo")
+  end
+  if ni < ilo
+    k = ilo - 1
+    println("deflation ispike = $ni: not required new ihi = $k")
+  else
+    while k > ni
+      akkm = A[k,k-1]
+      if akkm == z || k <= ni + 1
+        if deflation_criterion1(abs(A[k,ni]), abs(A[k,k]))
+          A[k,ni] = z
+          k -= 1
+        else
+          break
+        end
+      else
+        rk = k-1:k
+        if deflation_criterion1(norm(view(A, rk, ni)), norm(view(A, rk, rk))) 
+          A[k-1,ni] = A[k,ni] = z
+          k -= 2
+        else
+          break
+        end
+      end
+    end
+    if k < n
+      println("deflation ispike = $ni: zeroed $(k+1):$n, new ihi = $k")
     end
   end
-  ihi
+  ilo, k
 end
 
 """
 deflation criterion.
 """
-@inline deflation_criterion{T}(sub::T, da::T, db::T) = abs(sub) <= (abs(da) + abs(db) ) * eps(T)
+deflation_criterion{T}(sub::T, da::T, db::T) = deflation_criterion1(abs(sub), (abs(da) + abs(db) ))
+@inline deflation_criterion1{T}(sub::T, da::T) = sub <= da * eps(T)
 
 """
 Repeated aggressive deflation steps re-ordering Eigenvalues
 """
-function reorder!{T}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, Q::AbstractM, isize::Integer)
-  estimations!(A, ilo, ihi, Q, isize)
-  ispike = ihi - isize
+function reorder!{T}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, Q::AbstractM, iwindow::Integer)
+
+  iwindow = min(ihi-ilo+1, iwindow)
+  if iwindow <= 0
+    return ilo, ihi
+  end
+  estimations!(A, ilo, ihi, Q, iwindow)
+  ispike = ihi - iwindow
+  if ispike <= ilo
+    ihi = ilo - 1
+  end
   loc, hic = ispike+1, ihi
-  while loc <= hic
-    ihi = deflate!(A, ilo, ihi, isize)
+  while loc <= hic && ispike > ilo
+    ilo, ihi = deflate!(A, ilo, ihi, ispike)
     hic = min(ihi, hic)
     loc, hic = swap_sweep!(A, ispike, loc, hic, Q)
   end
-  ev = seigendiag(A, ispike+1, ihi)
-  transform_Hess!(A, ilo, ihi, Q, zeros(T, 0), ihi)
-  for k = length(ev):-1:1
-    transform_Hess!(A, ilo, ihi, Q, [ev[k]], 1)
+  if ihi >= ilo
+    ev = seigendiag(A, ispike+1, ihi)
+    transform_Hess!(A, ilo, ihi, Q, zeros(T, 0), ihi, 0)
+    for k = length(ev):-1:1
+      transform_Hess!(A, ilo, ihi, Q, [ev[k]], 1, 0)
+    end
+    transform_Hess!(A, ilo, ihi, Q, zeros(T, 0), ihi, 0)
   end
-  transform_Hess!(A, ilo, ihi, Q, zeros(T, 0), ihi)
-  ihi
+  ilo, ihi
 end
 
 """
-Extract eigenvalues from quasi diagonal matrix
+Extract eigenvalues from quasi triangular matrix
 """
 function seigendiag(A::AbstractMatrix, ilo, ihi)
-  ev = eig(A[ilo:ihi,ilo:ihi])[1]  # TODO replace by specialized eig
-  filter( x -> imag(x) >= 0, ev)
+  # ev = eig(A[ilo:ihi,ilo:ihi])[1]  # TODO replace by specialized eig
+  # filter( x -> imag(x) >= 0, ev)
+  ev = Complex{eltype(A)}[]
+  k = ilo
+  while k <= ihi
+    if k >= ihi || A[k+1,k] == 0
+      push!(ev, A[k,k])
+    else
+      r = ( A[k,k] + A[k+1,k+1] ) / 2
+      disc = discriminant(A, k, k + 1)
+      if disc < 0
+        push!(ev, r + sqrt(-disc)*im)
+      else
+        push!(ev, r + sqrt(disc))
+        push!(ev, r - sqrt(disc))
+      end
+      k += 1
+    end
+    k += 1
+  end
+  isreal(ev) ? real(ev) : ev
 end
 
 """
@@ -340,7 +402,7 @@ function swap_sweep!(A::AbstractMatrix, ispike::Integer, ilo::Integer, ihi::Inte
   loc = n + 1
   while i >= ilo
     res, ra, A2, spike2, R = testswap(A, A[:,ispike], ilo, i)
-    println("testswap($ilo,$i): $res $ra $spike2")
+    # println("testswap($ilo,$i): $res $ra $spike2")
     if res
       rb = last(ra)+1:n
       rn = 1:first(ra)-1
@@ -409,7 +471,7 @@ function is_swap_ok{T<:Real}(A::AbstractMatrix{T}, spike::AbstractVector{T}, n1:
   end
 
   # perform QR on matrix A
-  transform_Hess!(A, 1, n1 + n2, R, eigs, 1)
+  transform_Hess!(A, 1, n1 + n2, R, eigs, 1, 0)
   reschur!(A, n2)
   A_mul_B!(R', spike)
   spnorm2 = norm(spike[n2+1:n])
