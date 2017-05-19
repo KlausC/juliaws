@@ -308,11 +308,11 @@ function reorder!{T}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, Q::Abstra
   end
   if ihi >= ilo
     ev = seigendiag(A, ispike+1, ihi)
-    transform_Hess!(A, ilo, ihi, Q, zeros(T, 0), ihi, 0)
+    transform_Hess!(A, ilo, ihi, Q, zeros(T, 0), ihi, 0) # remove spike from A
     for k = length(ev):-1:1
-      transform_Hess!(A, ilo, ihi, Q, [ev[k]], 1, 0)
+      transform_Hess!(A, ilo, ihi, Q, [ev[k]], 1, 0) # insert eigenvalue estimations one by one
     end
-    transform_Hess!(A, ilo, ihi, Q, zeros(T, 0), ihi, 0)
+    transform_Hess!(A, ilo, ihi, Q, zeros(T, 0), ihi, 0) # remove bulges from A
   end
   ilo, ihi
 end
