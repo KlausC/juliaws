@@ -383,7 +383,7 @@ function testswap(A::AbstractMatrix, spike::AbstractVector, ilo::Integer, iup::I
   i1, n1, n2 = index_sizes(A, ilo, iup)
   if i1 >= ilo
     r = i1:iup
-    sp1, sp2, A2, spike2, R = is_swap_ok(A[r,r], spike[r], n1, n2)
+    sp1, sp2, A2, spike2, R = swap_small!(A[r,r], spike[r], n1, n2)
     if sp2 < sp1
       true, r, A2, spike2, R
     else
@@ -394,6 +394,9 @@ function testswap(A::AbstractMatrix, spike::AbstractVector, ilo::Integer, iup::I
   end
 end
 
+"""
+repeatedly swap adjacent eigenvalue blocks until no improvement of spike is found.
+"""
 function swap_sweep!(A::AbstractMatrix, ispike::Integer, ilo::Integer, ihi::Integer, Q::AbstractM)
   n = size(A, 2)
   i = ihi
@@ -443,7 +446,7 @@ end
 A is a n1+n2:n1+n2 Schur matrix, spike a n1+n2 vector. 1 <= n1, n2 <= 2.
 Orthogonally transform A to a Schur matrix with the diagonal eigenvalue blocks swapped.
 """
-function is_swap_ok{T<:Real}(A::AbstractMatrix{T}, spike::AbstractVector{T}, n1::Integer, n2::Integer)
+function swap_small!{T<:Real}(A::AbstractMatrix{T}, spike::AbstractVector{T}, n1::Integer, n2::Integer)
 
   ze, on = zero(T), one(T)
   g(i1::Integer, i2::Integer) = givens(ze, on, i1, i2)[1]
@@ -478,30 +481,17 @@ function is_swap_ok{T<:Real}(A::AbstractMatrix{T}, spike::AbstractVector{T}, n1:
   spnorm1, spnorm2, A, spike, R 
 end
 
-@inline function reschur!(A::AbstractMatrix, n1::Integer)
-
-  A[n1+1:end,1:n1] = 0
+"""
+Set elements of matrix to zero, which should be, but are not due to numerical errors.
+"""
+@inline function reschur!(A::AbstractMatrix, k::Integer)
+  A[k+1:end,1:k] = 0
 end
 
-
 """
-Swap two adjacent eigenvalues in diagonal of Schur form.
+Calculate eigenvalues of a real 1x1 or 2x2 matrix A.
+If eigenvalue is complex, return one complex number with positive imaginary part.
 """
-function swap!(A::AbstractMatrix, ilo::Integer, ihi::Integer, Q::AbstractM, p1::Integer, n1::Integer, p2::Integer, n2::Integer)
-  
-  n = size(A, 1)
-  r1 = p1:p1+n1-1
-  r2 = p2:p2+n2-1
-  s1 = p2+n2-n1:p2+n2-1
-  s2 = p1:p1+n2-1
-  A[s1,ilo:n], A[s2,ilo:n] = A[r1,ilo:n], A[r2,ilo:n]
-  A[1:ihi,s1], A[1:ihi,s2] = A[1:ihi,r1], A[1:ihi,r2]
-  Q[1:ihi,s1], Q[1:ihi,s2] = Q[1:ihi,r1], Q[1:ihi,r2]
-  shift = eig2(view(A, r2, r2))
-  transform_Hess!(A, p1, p2+n2-1, Q, shift, 2)
-  A
-end
-
 function eig2(A::AbstractMatrix)
   n = size(A, 1)
   if n == 1
