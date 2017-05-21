@@ -9,6 +9,22 @@ import Base: A_mul_Bc!, A_mul_B!, (*)
 typealias AbstractM Union{AbstractMatrix, LinAlg.AbstractRotation}
 
 """
+Transform a real matrix to Hessenberg form modyfying input matrices.
+"""
+function hessenberg!{T<:Real}(A::AbstractMatrix{T}, Q::AbstractM)
+  transform_Hess!(A, 1, size(A, 1), Q, T[], size(A, 1), 0)
+  A, Q
+end
+
+"""
+Transform a real matrix to Hessenberg form.
+"""
+function hessenberg{T<:Real}(A::AbstractMatrix{T})
+  Q = eye(A)
+  hessenberg!(copy(A), Q)
+end
+
+"""
 One step of Francis transformation Transform hessenberg matrix
 H is in upper Hessenberg form.
 shifts is a vector of shift values.
@@ -373,13 +389,13 @@ function window_size(A, ilo, ihi)
   wbest = 2
   for w = wlo:whi
     bestw = abs(A[ihi-w+1,ihi-w])
-    print("w = $w A[$(ihi-w+1);$(ihi-w)] = $bestw")
+    # print("w = $w A[$(ihi-w+1);$(ihi-w)] = $bestw")
     if bestw < best
       wbest = w
       best = bestw
-      print(" ***")
+      # print(" ***")
     end
-    println()
+    # println()
   end
   wbest
 end
@@ -388,9 +404,9 @@ end
 Lower and upper limits for window size.
 """
 function window_size_heuristic(A, ilo, ihi)
-  k = ( ihi - ilo + 1 ) ÷ 3
-  # (k * 9) ÷ 10, (k * 11 + 9) ÷ 10
-  2, (k * 11 + 9) ÷ 10
+  k = min(256, ( ihi - ilo + 1 ) ÷ 3 )
+  (k * 9) ÷ 10, (k * 11 + 9) ÷ 10
+  # 2, (k * 11 + 9) ÷ 10
 end
 
 
