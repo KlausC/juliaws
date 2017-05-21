@@ -297,12 +297,13 @@ function reorder!{T}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, Q::Abstra
   end
   estimations!(A, ilo, ihi, Q, iwindow)
   ispike = ihi - iwindow
-  if ispike <= ilo
-    ihi = ilo - 1
+  if ispike < ilo
+    return ilo, ilo - 1
   end
   loc, hic = ispike+1, ihi
-  while loc <= hic && ispike > ilo
+  while loc <= hic && ispike >= ilo
     ilo, ihi = deflate!(A, ilo, ihi, ispike)
+    # println("after deflate: ilo, ihi = $ilo, $ihi"); display(A)
     hic = min(ihi, hic)
     loc, hic = swap_sweep!(A, ispike, loc, hic, Q)
   end
@@ -316,6 +317,82 @@ function reorder!{T}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, Q::Abstra
   end
   ilo, ihi
 end
+
+"""
+Iterate reorder! till convergence
+"""
+function iterate!(A::AbstractMatrix, ilo::Integer, ihi::Integer, Q::AbstractM)
+
+  while ilo <= ihi
+    iwindow = window_size(A, ilo, ihi)
+    println("reorder!(A, $ilo, $ihi, Q, $iwindow)")
+    ilo, ihi = reorder!(A, ilo, ihi, Q, iwindow)
+  end
+end
+
+
+"""
+Separately process parts, if Hessenberg matrix A decays.
+"""
+function separate!(A::AbstractMatrix, jlo::Integer, jhi::Integer, Q::AbstractM)
+  ihi = jhi
+  while ihi >= jlo
+    ilo = separation_point(A, jlo, ihi)
+    iterate!(A, ilo, ihi, Q)
+    ihi = ilo - 1
+  end
+end
+
+"""
+Find last zero in subdiagonal
+"""
+function separation_point(A, jlo, ihi)
+  ilo = ihi
+  while ilo > jlo && A[ilo,ilo-1] != 0
+    ilo -= 1
+  end
+  ilo
+end
+
+"""
+Find appropriate window size. Must be >= 2 and < ihi - ilo + 1.
+"""
+function window_size(A, ilo, ihi)
+  if ihi - ilo <= 1
+    return 2
+  end
+  wlo, whi = window_size_heuristic(A, ilo, ihi)
+  wlo = max(wlo, 2)
+  whi = min(whi, ihi - ilo)
+  while wlo >= whi
+    whi += 1
+  end
+  whi = min(whi, ihi-ilo)
+  # find small subdiagonal element in interval [jlo, jhi]
+  best = Inf
+  wbest = 2
+  for w = wlo:whi
+    bestw = abs(A[ihi-w+1,ihi-w])
+    print("w = $w A[$(ihi-w+1);$(ihi-w)] = $bestw")
+    if bestw < best
+      wbest = w
+      best = bestw
+      print(" ***")
+    end
+    println()
+  end
+  wbest
+end
+
+"""
+Lower and upper limits for window size.
+"""
+function window_size_heuristic(A, ilo, ihi)
+  k = ( ihi - ilo + 1 ) ÷ 3
+  # (k * 9) ÷ 10, (k * 11 + 9) ÷ 10
+  2, (k * 11 + 9) ÷ 10
+end
+
 
 """
 Extract eigenvalues from quasi triangular matrix

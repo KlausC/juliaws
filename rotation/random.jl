@@ -23,7 +23,18 @@ end
 """
 Generate random orthogonal real matrix. Determinant may be 1 or -1.
 """
-function orthogonal{T<:AbstractFloat}(n::Integer, m::Integer, ::Type{T} = Float64, rng::AbstractRNG = Random.GLOBAL_RNG)
+
+function orthogonal{T<:AbstractFloat}(n::Integer, m::Integer, ::Type{T} = Float64, rng    ::AbstractRNG = Random.GLOBAL_RNG)
+
+  Q = zeros(T,0)
+  for k = 1:m
+    append!(Q, unitvector(n, T, rng))
+  end
+  Q = reshape(Q, n, m)
+  qr(Q)[1]
+end
+
+function orthogonal2{T<:AbstractFloat}(n::Integer, m::Integer, ::Type{T} = Float64, rng::AbstractRNG = Random.GLOBAL_RNG)
 
   n >= m || error("orthogonal random matrix requires n >= m")
   Q = eye(T, n, m)
