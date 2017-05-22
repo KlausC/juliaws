@@ -305,7 +305,7 @@ deflation_criterion{T}(sub::T, da::T, db::T) = deflation_criterion1(abs(sub), (a
 """
 Repeated aggressive deflation steps re-ordering Eigenvalues
 """
-function reorder!{T}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, Q::AbstractM, iwindow::Integer)
+function reorder!{T<:Union{Float64,Float32,Float16}}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, Q::AbstractM, iwindow::Integer)
 
   iwindow = min(ihi-ilo+1, iwindow)
   if iwindow <= 0
@@ -332,6 +332,57 @@ function reorder!{T}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, Q::Abstra
     transform_Hess!(A, ilo, ihi, Q, zeros(T, 0), ihi, 0) # remove bulges from A
   end
   ilo, ihi
+end
+
+"""
+Refine Float64 to BigFloat precision.
+"""
+function iterate!{T<:BigFloat}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, Q::AbstractM)
+
+  # approximation of submatrix eigenvalues in Float64 precision
+  r = ilo:ihi
+  ev = seigendiag(smalleig(Float64.(view(A, r, r)))[1], 1, ihi-ilo+1)
+
+  for k = length(ev):-1:1
+    evk = ev[k]
+    evk2 = isreal(evk) ? T(evk) : Complex{T}(evk)
+    ihi = refineprecision!(A, ilo, ihi, Q, evk2)
+  end
+  ilo, ihi
+end
+
+"""
+Refine one eigenvalue close to estimation value
+"""
+function refineprecision!(A::AbstractMatrix, ilo::Integer, ihi::Integer, Q::AbstractM, ev)
+ 
+  ih2 = isreal(ev) ? ihi : max(ihi - 1, ilo)
+  r = ih2:ihi
+  while !converged(A, ilo, ihi)
+    transform_Hess!(A, ilo, ihi, Q, [ev], ihi, 0)
+    ev = eig2(view(A, r, r))[end]
+  end
+  ihi = ih2 - 1
+  if ihi >= ilo
+    A[ihi+1,ihi] = 0
+  end
+  ihi
+end
+
+function converged(A, ilo, ihi)
+  if ilo >= ihi
+    return true
+  end
+  if deflation_criterion(A[ihi,ihi-1], A[ihi-1,ihi-1], A[ihi,ihi])
+      return true
+  end
+  if discriminant(A, ihi-1, ihi) > 0
+    return false
+  end
+  if ilo >= ihi - 1
+    return true
+  end
+  deflation_criterion(A[ihi-1,ihi-2], A[ihi-2,ihi-2], A[ihi-1,ihi-1]) # TODO
 end
 
 """
@@ -582,7 +633,7 @@ Set elements of matrix to zero, which should be, but are not due to numerical er
 end
 
 """
-Calculate eigenvalues of a real 1x1 or 2x2 matrix A.
+Calculate vector of eigenvalues of a real 1x1 or 2x2 matrix A.
 If eigenvalue is complex, return one complex number with positive imaginary part.
 """
 function eig2(A::AbstractMatrix)
