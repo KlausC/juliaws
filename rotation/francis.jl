@@ -9,6 +9,11 @@ import Base: A_mul_Bc!, A_mul_B!, (*)
 typealias AbstractM Union{AbstractMatrix, LinAlg.AbstractRotation}
 
 """
+global variable for testing only
+"""
+A_global = 0
+
+"""
 Transform a real matrix to Hessenberg form modyfying input matrices.
 """
 function hessenberg!{T<:Real}(A::AbstractMatrix{T}, Q::AbstractM)
@@ -212,6 +217,9 @@ function estimations!(A::AbstractMatrix, ilo::Integer, ihi::Integer, Q::Abstract
   end
   ra = ni+1:ihi
   rb = ihi+1:n
+
+  # println("before entering smalleig $(ni+1):$ihi")
+
   A[ra,ra], FZ = smalleig(view(A, ra, ra))
   if ni >= ilo
     A[ra,ni] = FZ' * A[ra,ni]
@@ -226,8 +234,17 @@ end
 Provide schur matrix and transformation for small matrix
 """
 function smalleig(A::AbstractArray)
-  F = schurfact(A)
-  F[:T], F[:Z]
+  # F = schurfact(A)
+  # F[:T], F[:Z]
+  n = size(A, 1)
+  if n == 1
+    A, eye(A)
+  elseif n == 2
+    A, G = givens1(A, 1, 2)
+    A, G' * eye(A)
+  else
+    schur2(A)
+  end
 end
 
 """
@@ -261,14 +278,14 @@ function deflate!(A::AbstractMatrix, ilo::Integer, ihi::Integer, ispike::Integer
   n = min(size(A, 1), ihi)
   k = n
   ni = ispike
-  if deflation_criterion1(abs(A[ilo+1,ilo]), abs(A[ilo,ilo]))
+  if ilo < ispike && deflation_criterion1(abs(A[ilo+1,ilo]), abs(A[ilo,ilo]))
     A[ilo+1,ilo] = z
     ilo += 1
-    println("deflate at top: new ilo = $ilo")
+    # println("deflate at top: new ilo = $ilo")
   end
   if ni < ilo
     k = ilo - 1
-    println("deflation ispike = $ni: not required new ihi = $k")
+    # println("deflation ispike = $ni: not required new ihi = $k")
   else
     while k > ni
       akkm = A[k,k-1]
@@ -290,7 +307,7 @@ function deflate!(A::AbstractMatrix, ilo::Integer, ihi::Integer, ispike::Integer
       end
     end
     if k < n
-      println("deflation ispike = $ni: zeroed $(k+1):$n, new ihi = $k")
+      # println("deflation ispike = $ni: zeroed $(k+1):$n, new ihi = $k")
     end
   end
   ilo, k
@@ -300,7 +317,7 @@ end
 deflation criterion.
 """
 deflation_criterion{T}(sub::T, da::T, db::T) = deflation_criterion1(abs(sub), (abs(da) + abs(db) ))
-@inline deflation_criterion1{T}(sub::T, da::T) = sub <= da * eps(T)
+@inline deflation_criterion1{T}(sub::T, da::T) = sub <= da * eps(T)^2
 
 """
 Repeated aggressive deflation steps re-ordering Eigenvalues
@@ -316,20 +333,26 @@ function reorder!{T<:Union{Float64,Float32,Float16}}(A::AbstractMatrix{T}, ilo::
   if ispike < ilo
     return ilo, ilo - 1
   end
+  # @assert is_hessenberg(A, ispike) "hessenberg after estimations! $ilo:$ihi"
+  # @assert is_transform(A, Q) "transform after estimations! $ilo:$ihi"
   loc, hic = ispike+1, ihi
   while loc <= hic && ispike >= ilo
     ilo, ihi = deflate!(A, ilo, ihi, ispike)
     # println("after deflate: ilo, ihi = $ilo, $ihi"); display(A)
     hic = min(ihi, hic)
     loc, hic = swap_sweep!(A, ispike, loc, hic, Q)
+    # @assert is_transform(A, Q) "transform after swap_sweep $ilo:$ihi"
   end
   if ihi >= ilo
     ev = seigendiag(A, ispike+1, ihi)
     transform_Hess!(A, ilo, ihi, Q, zeros(T, 0), ihi, 0) # remove spike from A
+    # @assert is_hessenberg(A) "removed spike at $ispike - $ilo:$ihi"
     for k = length(ev):-1:1
       transform_Hess!(A, ilo, ihi, Q, [ev[k]], 1, 0) # insert eigenvalue estimations one by one
     end
     transform_Hess!(A, ilo, ihi, Q, zeros(T, 0), ihi, 0) # remove bulges from A
+    # @assert is_hessenberg(A) "removed bulges $ilo:$ihi"
+    # @assert is_transform(A, Q) "transform after bulges chase $ilo:$ihi"
   end
   ilo, ihi
 end
@@ -392,11 +415,38 @@ function iterate!(A::AbstractMatrix, ilo::Integer, ihi::Integer, Q::AbstractM)
 
   while ilo <= ihi
     iwindow = window_size(A, ilo, ihi)
-    println("reorder!(A, $ilo, $ihi, Q, $iwindow)")
+    # println("reorder!(A, $ilo, $ihi, Q, $iwindow)")
     ilo, ihi = reorder!(A, ilo, ihi, Q, iwindow)
+    if ! is_hessenberg(A)
+      display(A)
+      showall(A); println()
+    end
+    # @assert is_hessenberg(A) "is_hessenberg $ilo:$ihi"
+    # @assert is_transform(A, Q) "is_transform $ilo:$ihi"
   end
 end
 
+function schur2(AA::AbstractMatrix)
+  global A_global
+  A_saved = A_global
+  A_global = copy(AA)
+  n = size(AA, 1)
+  n == size(AA, 2) || error("schur2 required square matrix")
+
+  A = copy(AA)
+  Q = eye(A)
+  hessenberg!(A, Q)
+  # @assert is_hessenberg(A) "is_hessenberg"
+  # @assert is_transform(A, Q) "is_transform"
+  separate!(A, 1, n, Q)
+  # @assert is_hessenberg(A) "is_hessenberg"
+  # @assert is_transform(A, Q) "is_transform"
+  #  println("schur2($n)")
+  #  showall(AA); println()
+  #  showall(A); println()
+  A_global = A_saved
+  A, Q
+end
 
 """
 Separately process parts, if Hessenberg matrix A decays.
@@ -406,6 +456,8 @@ function separate!(A::AbstractMatrix, jlo::Integer, jhi::Integer, Q::AbstractM)
   while ihi >= jlo
     ilo = separation_point(A, jlo, ihi)
     iterate!(A, ilo, ihi, Q)
+    # @assert is_hessenberg(A) "is_hessenberg $ilo:$ihi"
+    # @assert is_transform(A, Q) "is_transform $ilo:$ihi"
     ihi = ilo - 1
   end
 end
@@ -700,7 +752,7 @@ function givens1{T<:Number}(A::AbstractMatrix{T}, i1::Integer, i2::Integer)
     ed = d - e2
     G, r = abs(b) + abs(ed) > abs(b) + abs(ea) ? givens(b, ed, i1, i2) : givens(ea, x, i1, i2)
     v = 2( da * G.c - bpx * G.s) * G.s + b
-    G, [e1 v; 0 e2]
+    [e1 v; 0 e2], G
   else
     bx = ( b - x ) / 2
     root = hypot(da, bpx)
@@ -708,8 +760,38 @@ function givens1{T<:Number}(A::AbstractMatrix{T}, i1::Integer, i2::Integer)
     w = bx + root
     v = disc / w
     G, r = abs(b) >= abs(x) ? givens(w + x, da, i1, i2) : givens(da, w - b, i1, i2)
-    G, [ apd w; v apd]
+    [ apd w; v apd], G
   end
 end
 
+"""
+Test if square matrix A is transformed to A by Q. (B * Q - Q * A) is small.
+"""
+function is_transform(B::AbstractMatrix, A::AbstractMatrix, Q)
+  norm(Q * A - B * Q, 1) <= eps(eltype(A)) * size(A, 1) * 1000
 end
+
+function is_transform(A, Q)
+  global A_global
+  is_transform(A_global, A, Q)
+end
+
+"""
+Test if matrix is exact Hessenberg form. (Below subdiagonal exact zero)
+"""
+function is_hessenberg(A::AbstractMatrix, ispike::Integer = 0)
+  n, m = size(A)
+  for k = 1:m
+    if k != ispike
+      for i = k+2:n
+        if A[i,k] != 0
+          return false
+        end
+      end
+    end
+  end
+  true
+end
+
+end
+
