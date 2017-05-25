@@ -5,13 +5,7 @@ module Francis
 
 import Base: A_mul_Bc!, A_mul_B!, (*)
 
-
 typealias AbstractM Union{AbstractMatrix, LinAlg.AbstractRotation}
-
-"""
-global variable for testing only
-"""
-A_global = 0
 
 """
 Transform a real matrix to Hessenberg form modyfying input matrices.
@@ -39,11 +33,9 @@ All shift values should be distinct.
 function transform_Hess!{T<:Real, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, Q::AbstractM, s::Vector{S}, maxchase::Integer, iwindow::Integer)
 
   !isa(Q, AbstractMatrix) || size(A, 2) == size(Q, 2) || error("A and Q have incompatible sizes")
-  n, m = size(A)
-  z = zero(T)
-  n == m || error("require square matrix")
-  1 <= ilo <= ihi <= n || error("ilo = $ilo, ihi = $ihi not in ($n, $m) Matrix)")
 
+  n = size(A, 1)
+  z = zero(T)
   m = counteigs(s)
   #ilo, ihi = deflate_subdiagonal!(A, ilo, ihi)
   #println("def_sub ilo = $ilo ihi = $ihi")
@@ -87,15 +79,7 @@ function transform_Hess!{T<:Real, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, 
     end
 
     # Third step: set in new upper left bulge
-    m2 = findlast(x -> x != 0, pe)
-    for k = m2:-1:ilo+1
-      G, r = givens(pe, k-1, k)
-      pe[k-1] = r
-      pe[k] = 0
-      A_mul_B!(G, A)
-      A_mul_Bc!(A, G)
-      A_mul_Bc!(Q, G)
-    end
+    set_in!(A, ilo, Q, pe)
   end
 
   # Forth step: chase all remaining bulks, oldest first
@@ -115,6 +99,18 @@ function transform_Hess!{T<:Real, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, 
   #Q = LinAlg.Rotation(LinAlg.Givens{T}[])
   Q = eye(T, size(A, 2))
   transform_Hess!(A, Q, s, maxchase, iwindow)
+end
+
+function set_in!(A::AbstractMatrix, ilo::Integer, Q::AbstractM, pe::Vector)
+  m2 = findlast(x -> x != 0, pe)
+  for k = m2:-1:ilo+1
+    G, r = givens(pe, k-1, k)
+    pe[k-1] = r
+    pe[k] = 0
+    A_mul_B!(G, A)
+    A_mul_Bc!(A, G)
+    A_mul_Bc!(Q, G)
+  end
 end
 
 """
@@ -243,7 +239,7 @@ function smalleig(A::AbstractArray)
     A, G = givens1(A, 1, 2)
     A, G' * eye(A)
   else
-    schur2(A)
+    _schur2(A)
   end
 end
 
@@ -317,7 +313,7 @@ end
 deflation criterion.
 """
 deflation_criterion{T}(sub::T, da::T, db::T) = deflation_criterion1(abs(sub), (abs(da) + abs(db) ))
-@inline deflation_criterion1{T}(sub::T, da::T) = sub <= da * eps(T)^2
+@inline deflation_criterion1{T}(sub::T, da::T) = sub <= da * eps(T) / 4
 
 """
 Repeated aggressive deflation steps re-ordering Eigenvalues
@@ -427,25 +423,38 @@ function iterate!(A::AbstractMatrix, ilo::Integer, ihi::Integer, Q::AbstractM)
 end
 
 function schur2(AA::AbstractMatrix)
-  global A_global
-  A_saved = A_global
-  A_global = copy(AA)
-  n = size(AA, 1)
-  n == size(AA, 2) || error("schur2 required square matrix")
+  n, m = size(AA)
+  n == m || error("require square matrix")
+  _schur2(AA)
+end
 
+function _schur2(AA::AbstractMatrix)
   A = copy(AA)
   Q = eye(A)
   hessenberg!(A, Q)
-  # @assert is_hessenberg(A) "is_hessenberg"
-  # @assert is_transform(A, Q) "is_transform"
-  separate!(A, 1, n, Q)
-  # @assert is_hessenberg(A) "is_hessenberg"
-  # @assert is_transform(A, Q) "is_transform"
-  #  println("schur2($n)")
-  #  showall(AA); println()
-  #  showall(A); println()
-  A_global = A_saved
+  separate!(A, 1, size(A, 1), Q)
+  finish!(A, Q)
   A, Q
+end
+
+"""
+Finish up to standardized 2x2 diagonal blocks
+"""
+function finish!(A::AbstractMatrix, Q::AbstractM)
+  n = size(A, 1)
+  for k = 1:n-1
+    if A[k+1,k] != 0
+      r = k:k+1
+      AA, G = givens1(A, k, k+1)
+      A_mul_B!(G, view(A, :, k+1:n))
+      A_mul_Bc!(view(A, 1:k-1, :), G)
+      A_mul_Bc!(Q, G)
+      A[r,r] = AA
+      # println("finish($k:$(k+1))")
+      # display(@view A[k:k+1,k:k+1])
+      # display(AA)
+    end
+  end
 end
 
 """
@@ -769,11 +778,6 @@ Test if square matrix A is transformed to A by Q. (B * Q - Q * A) is small.
 """
 function is_transform(B::AbstractMatrix, A::AbstractMatrix, Q)
   norm(Q * A - B * Q, 1) <= eps(eltype(A)) * size(A, 1) * 1000
-end
-
-function is_transform(A, Q)
-  global A_global
-  is_transform(A_global, A, Q)
 end
 
 """
