@@ -37,7 +37,6 @@ function transform_Hess!{T<:Real, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, 
   n = size(A, 1)
   z = zero(T)
   m = counteigs(s)
-  #ilo, ihi = deflate_subdiagonal!(A, ilo, ihi)
   #println("def_sub ilo = $ilo ihi = $ihi")
   
   # supress further calculations if A is already quasi-diagonal
@@ -254,15 +253,35 @@ Return new lower and upper indices.
 """
 function deflate_subdiagonal!(A::AbstractMatrix, ilo::Integer, ihi::Integer)
   z = zero(eltype(A))
-  while ihi > ilo && delfation_criterion(A[ihi,ihi-1], A[ihi-1,ihi-1], A[ihi,ihi])
-    A[ihi,ihi-1] = z
-    ihi -= 1
+  while (idiff = can_deflate_hi(A, ilo, ihi)) > 0
+    ihi -= idiff
+    A[ihi+1,ihi] = z
   end
-  while ilo < ihi && delfation_criterion(A[ilo+1,ilo], A[ilo+1,ilo+1], A[ilo,ilo])
-    A[ilo+1,ilo] = z
-    ilo += 1
+  while (idiff = can_deflate_lo(A, ilo, ihi)) > 0
+    ilo += idiff
+    A[ilo,ilo-1] = z
   end
   ilo, ihi
+end
+
+function can_deflate_hi(A::AbstractMatrix, ilo, ihi)
+  if ihi > ilo && deflation_criterion(A[ihi,ihi-1], A[ihi-1,ihi-1], A[ihi,ihi])
+    1
+  elseif ihi > ilo+1 && deflation_criterion(A[ihi-1,ihi-2], A[ihi-2,ihi-2], A[ihi-1,ihi-1])
+    2
+  else
+    0
+  end
+end
+
+function can_deflate_lo(A::AbstractMatrix, ilo, ihi)
+  if ihi > ilo && deflation_criterion(A[ilo+1,ilo], A[ilo+1,ilo+1], A[ilo,ilo])
+    1
+  elseif ihi > ilo+1 && deflation_criterion(A[ilo+2,ilo+1], A[ilo+2,ilo+2], A[ilo+1,ilo+1])
+    2
+  else
+    0
+  end
 end
 
 """
@@ -320,31 +339,53 @@ Repeated aggressive deflation steps re-ordering Eigenvalues
 """
 function reorder!{T<:Union{Float64,Float32,Float16}}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, Q::AbstractM, iwindow::Integer)
 
+  n = size(A, 1)
+  # println("before deflate_sub($ilo,$ihi)")
+  ilo2, ihi2 = deflate_subdiagonal!(A, ilo, ihi)
+  if ihi2 < ihi
+    println("deflated(A($n $ilo:$ihi)) by $(ihi-ilo-ihi2+ilo2) / $(ihi-ilo+1) to $ilo2:$ihi2")
+  end
+
+  ilo, ihi = ilo2, ihi2
   iwindow = min(ihi-ilo+1, iwindow)
   if iwindow <= 0
     return ilo, ihi
   end
+  # println("before estimations($ilo,$ihi):"); display(A);
   estimations!(A, ilo, ihi, Q, iwindow)
   ispike = ihi - iwindow
+  # println("after estimations($ilo,$ihi): spike at $ispike"); display(A);
   if ispike < ilo
     return ilo, ilo - 1
   end
   # @assert is_hessenberg(A, ispike) "hessenberg after estimations! $ilo:$ihi"
   # @assert is_transform(A, Q) "transform after estimations! $ilo:$ihi"
+  k = 0
   loc, hic = ispike+1, ihi
   while loc <= hic && ispike >= ilo
-    ilo, ihi = deflate!(A, ilo, ihi, ispike)
-    # println("after deflate: ilo, ihi = $ilo, $ihi"); display(A)
+    k += 1
+    ilo, ihi2 = deflate!(A, ilo, ihi, ispike)
+    # println("after deflate($ilo,$ihi):"); display(A);
+    if ihi2 < ihi
+      println("deflated($k A($n $ilo:$ihi)) by $(ihi-ihi2) / $(ihi-ispike) spike $ispike")
+      # display(A[ispike+1:ihi,ispike:ihi])
+    end
+    ihi = ihi2
     hic = min(ihi, hic)
-    loc, hic = swap_sweep!(A, ispike, loc, hic, Q)
-    # @assert is_transform(A, Q) "transform after swap_sweep $ilo:$ihi"
+    if loc <= hic
+      # loc, hic = loc, loc-1
+      loc, hic = swap_sweep!(A, ispike, loc, hic, Q)
+      # @assert is_transform(A, Q) "transform after swap_sweep $ilo:$ihi"
+    end
   end
   if ihi >= ilo
     ev = seigendiag(A, ispike+1, ihi)
     transform_Hess!(A, ilo, ihi, Q, zeros(T, 0), ihi, 0) # remove spike from A
     # @assert is_hessenberg(A) "removed spike at $ispike - $ilo:$ihi"
-    for k = length(ev):-1:1
-      transform_Hess!(A, ilo, ihi, Q, [ev[k]], 1, 0) # insert eigenvalue estimations one by one
+    for i = 1:min(max(1,(ihi-ilo+1)÷3),3)
+      for k = length(ev):-1:1
+        transform_Hess!(A, ilo, ihi, Q, [ev[k]], 1, 0) # insert eigenvalue estimations
+      end
     end
     transform_Hess!(A, ilo, ihi, Q, zeros(T, 0), ihi, 0) # remove bulges from A
     # @assert is_hessenberg(A) "removed bulges $ilo:$ihi"
@@ -413,10 +454,6 @@ function iterate!(A::AbstractMatrix, ilo::Integer, ihi::Integer, Q::AbstractM)
     iwindow = window_size(A, ilo, ihi)
     # println("reorder!(A, $ilo, $ihi, Q, $iwindow)")
     ilo, ihi = reorder!(A, ilo, ihi, Q, iwindow)
-    if ! is_hessenberg(A)
-      display(A)
-      showall(A); println()
-    end
     # @assert is_hessenberg(A) "is_hessenberg $ilo:$ihi"
     # @assert is_transform(A, Q) "is_transform $ilo:$ihi"
   end
