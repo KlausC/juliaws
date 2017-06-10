@@ -3,9 +3,8 @@ Calculation of eigenvalues using Francis Iteration - QR
 """
 module Francis
 
-import Base: A_mul_Bc!, A_mul_B!, (*)
-
-typealias AbstractM Union{AbstractMatrix, LinAlg.AbstractRotation}
+include("util.jl")
+include("transformhess.jl")
 
 """
 Transform a real matrix to Hessenberg form modyfying input matrices.
@@ -24,173 +23,21 @@ function hessenberg{T<:Real}(A::AbstractMatrix{T})
 end
 
 """
-One step of Francis transformation Transform hessenberg matrix
-H is in upper Hessenberg form.
-shifts is a vector of shift values.
-With each shift value, its conjugate complex value is implicitly used as shift
-All shift values should be distinct.
+Decompose abstract matrix into Schur factors
 """
-function transform_Hess!{T<:Real, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, Q::AbstractM, s::Vector{S}, maxchase::Integer, iwindow::Integer)
-
-  !isa(Q, AbstractMatrix) || size(A, 2) == size(Q, 2) || error("A and Q have incompatible sizes")
-
-  n = size(A, 1)
-  z = zero(T)
-  m = counteigs(s)
-  #println("def_sub ilo = $ilo ihi = $ihi")
-  
-  # supress further calculations if A is already quasi-diagonal
-  isize = ihi - ilo + 1
-  if isize <= 1 || isize == 2 && discriminant(A, ilo, ihi) < z
-    m = 0
-    maxchase = 0
-  end
-  
-  # Any shifts provided
-  if m > 0
-
-    # First step: shift bulges blocking the undisturbed insertion
-    if isize > 4
-      i0, m0 = lastbulge(A, ilo, ihi, m + 1)
-      if i0 > 0
-        chase!(A, ilo, ihi, Q, m + 2 - i0, iwindow)
-      end
-    end
-
-    # Second step: compute  prod(A-s(k))e1
-    pe = zeros(T, n)
-    pe[ilo] = one(T)
-    k = j = 1
-    while j <= m
-      sr = real(s[k])
-      si = imag(s[k])
-      if si == 0
-        pe = A * pe - sr * pe
-        j += 1
-      else
-        pe = A * ( A * pe - 2sr * pe) + ( hypot(sr, si) ^ 2 ) * pe
-        if k < length(s) && imag(s[k+1]) == -si
-          k += 1
-        end
-        j += 2
-      end
-      k += 1
-    end
-
-    # Third step: set in new upper left bulge
-    set_in!(A, ilo, Q, pe)
-  end
-
-  # Forth step: chase all remaining bulks, oldest first
-  if maxchase > 0
-    chase!(A, ilo, ihi, Q, maxchase, iwindow)
-  end
-  ilo, ihi, Q
+function schur2(AA::AbstractMatrix)
+  n, m = size(AA)
+  n == m || error("require square matrix")
+  _schur2(AA)
 end
 
-function transform_Hess!{T<:Real, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, Q::AbstractM, s::Vector{S}, maxchase::Integer, iwindow::Integer = 0)
-
-  transform_Hess!(A, 1, size(A, 1), Q, s, maxchase, iwindow)
-end
-
-function transform_Hess!{T<:Real, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, s::Vector{S}, maxchase::Integer, iwindow::Integer = 0)
-
-  #Q = LinAlg.Rotation(LinAlg.Givens{T}[])
-  Q = eye(T, size(A, 2))
-  transform_Hess!(A, Q, s, maxchase, iwindow)
-end
-
-function set_in!(A::AbstractMatrix, ilo::Integer, Q::AbstractM, pe::Vector)
-  m2 = findlast(x -> x != 0, pe)
-  for k = m2:-1:ilo+1
-    G, r = givens(pe, k-1, k)
-    pe[k-1] = r
-    pe[k] = 0
-    A_mul_B!(G, A)
-    A_mul_Bc!(A, G)
-    A_mul_Bc!(Q, G)
-  end
-end
-
-"""
-Count number of eigenvalues.
-Each non-real eigenvalue is counted twice, if not paired with its conjugate.
-"""
-counteigs{T<:Real}(s::Vector{T}) = length(s)
-function counteigs{T}(s::Vector{Complex{T}})
-  z = zero(T)
-  m = length(s)
-  count = 0
-  k = 1
-  while k <= m
-    sk = s[k]
-    si = imag(sk)
-    if si == z
-      count += 1
-    else
-      if k < m && imag(s[k+1]) == -si
-        k += 1
-      end
-      count += 2
-    end
-    k += 1
-  end
-  count
-end
-
-"""
-Chase all bulges towards right lower corner
-"""
-function chase!(A, ilo::Integer, ihi::Integer, Q, maxchase::Integer, iwindow::Integer)
-  n1, n2 = size(A)
-  n2 = min(ihi, n2)
-  n1 = min(ihi, n1)
-  m = i0 = n2 - 1 # column to start with
-
-  while i0 >= ilo && m > 0
-    i0, m = lastbulge(A, ilo, ihi, i0 - 1)
-
-    if m > 0
-      i1 = i0 + m > ihi -iwindow ? n2 - 2 : min(i0 + maxchase - 1, n2 - 2)
-      for  i = i0:min(i0 + maxchase - 1, n2 - 2)
-        for k = min(i+m+1,n1):-1:i+2
-          if A[k,i] != 0
-            G, r = givens(A, k-1, k, i)
-            A_mul_B!(G, A)
-            A_mul_Bc!(A, G)
-            A_mul_Bc!(Q, G)
-            A[k-1,i] = r
-            A[k,i] = 0
-          end
-        end
-      end
-    end
-  end
+function _schur2(AA::AbstractMatrix)
+  A = copy(AA)
+  Q = eye(A)
+  hessenberg!(A, Q)
+  separate!(A, 1, size(A, 1), Q, iterate!)
+  finish!(A, Q)
   A, Q
-end
-
-"""
-Find last bulge start column and size. Start search in column i.
-"""
-function lastbulge{T<:Number}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, i::Integer)
-  n, m = size(A)
-  n == m || error("need square matrix")
-  #i <= n - 1 || error("column number must be less than n")
-
-  maxpos = 2
-  while i >= ilo
-    m = findlast(A[i+2:ihi,i])
-    if m == 0 
-      if maxpos > 2
-        break
-      end
-    else
-      maxpos = max(maxpos, m + i + 1)
-    end
-    i -= 1
-  end
-  m = maxpos - i - 2
-  m == 0 ? 0 : i + 1, m
 end
 
 """
@@ -241,11 +88,6 @@ function smalleig(A::AbstractArray)
     _schur2(A)
   end
 end
-
-"""
-Discriminant of 2 x 2 submatrix
-"""
-@inline discriminant(A, i, j) = ((A[i,i] - A[j,j]) / 2 ) ^2 + A[i,j] * A[j,i]
 
 """
 Deflate elements in first subdiagonal.
@@ -343,7 +185,7 @@ function reorder!{T<:Union{Float64,Float32,Float16}}(A::AbstractMatrix{T}, ilo::
   # println("before deflate_sub($ilo,$ihi)")
   ilo2, ihi2 = deflate_subdiagonal!(A, ilo, ihi)
   if ihi2 < ihi
-    println("deflated(A($n $ilo:$ihi)) by $(ihi-ilo-ihi2+ilo2) / $(ihi-ilo+1) to $ilo2:$ihi2")
+    # println("deflated(A($n $ilo:$ihi)) by $(ihi-ilo-ihi2+ilo2) / $(ihi-ilo+1) to $ilo2:$ihi2")
   end
 
   ilo, ihi = ilo2, ihi2
@@ -367,7 +209,7 @@ function reorder!{T<:Union{Float64,Float32,Float16}}(A::AbstractMatrix{T}, ilo::
     ilo, ihi2 = deflate!(A, ilo, ihi, ispike)
     # println("after deflate($ilo,$ihi):"); display(A);
     if ihi2 < ihi
-      println("deflated($k A($n $ilo:$ihi)) by $(ihi-ihi2) / $(ihi-ispike) spike $ispike")
+      # println("deflated($k A($n $ilo:$ihi)) by $(ihi-ihi2) / $(ihi-ispike) spike $ispike")
       # display(A[ispike+1:ihi,ispike:ihi])
     end
     ihi = ihi2
@@ -402,19 +244,27 @@ function iterate!{T<:BigFloat}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer,
   # approximation of submatrix eigenvalues in Float64 precision
   r = ilo:ihi
   ev = seigendiag(smalleig(Float64.(view(A, r, r)))[1], 1, ihi-ilo+1)
-
-  for k = length(ev):-1:1
-    evk = ev[k]
-    evk2 = isreal(evk) ? T(evk) : Complex{T}(evk)
-    ihi = refineprecision!(A, ilo, ihi, Q, evk2)
-  end
+  ihi = refineprecision!(A, ilo, ihi, Q, ev)
   ilo, ihi
+end
+
+"""
+Refine all eigenvalues of alist close to estimation value
+"""
+function refineprecision!{T<:AbstractFloat}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, Q::AbstractM, ev::AbstractVector)
+  
+  ih2 = ihi
+  for evk in reverse(ev)
+    evk2 = isreal(evk) ? T(evk) : Complex{T}(evk)
+    ih2 = refineprecision!(A, ilo, ih2, Q, evk)
+  end
+  ih2
 end
 
 """
 Refine one eigenvalue close to estimation value
 """
-function refineprecision!(A::AbstractMatrix, ilo::Integer, ihi::Integer, Q::AbstractM, ev)
+function refineprecision!(A::AbstractMatrix, ilo::Integer, ihi::Integer, Q::AbstractM, ev::Number)
  
   ih2 = isreal(ev) ? ihi : max(ihi - 1, ilo)
   r = ih2:ihi
@@ -429,6 +279,9 @@ function refineprecision!(A::AbstractMatrix, ilo::Integer, ihi::Integer, Q::Abst
   ihi
 end
 
+"""
+Detect convergence of last eigenvalue block of hessenberg matrix.
+"""
 function converged(A, ilo, ihi)
   if ilo >= ihi
     return true
@@ -459,21 +312,6 @@ function iterate!(A::AbstractMatrix, ilo::Integer, ihi::Integer, Q::AbstractM)
   end
 end
 
-function schur2(AA::AbstractMatrix)
-  n, m = size(AA)
-  n == m || error("require square matrix")
-  _schur2(AA)
-end
-
-function _schur2(AA::AbstractMatrix)
-  A = copy(AA)
-  Q = eye(A)
-  hessenberg!(A, Q)
-  separate!(A, 1, size(A, 1), Q)
-  finish!(A, Q)
-  A, Q
-end
-
 """
 Finish up to standardized 2x2 diagonal blocks
 """
@@ -497,11 +335,11 @@ end
 """
 Separately process parts, if Hessenberg matrix A decays.
 """
-function separate!(A::AbstractMatrix, jlo::Integer, jhi::Integer, Q::AbstractM)
+function separate!(A::AbstractMatrix, jlo::Integer, jhi::Integer, Q::AbstractM, it!::Function)
   ihi = jhi
   while ihi >= jlo
     ilo = separation_point(A, jlo, ihi)
-    iterate!(A, ilo, ihi, Q)
+    it!(A, ilo, ihi, Q)
     # @assert is_hessenberg(A) "is_hessenberg $ilo:$ihi"
     # @assert is_transform(A, Q) "is_transform $ilo:$ihi"
     ihi = ilo - 1
@@ -558,34 +396,6 @@ function window_size_heuristic(A, ilo, ihi)
   # 2, (k * 11 + 9) ÷ 10
 end
 
-
-"""
-Extract eigenvalues from quasi triangular matrix
-"""
-function seigendiag(A::AbstractMatrix, ilo, ihi)
-  # ev = eig(A[ilo:ihi,ilo:ihi])[1]  # TODO replace by specialized eig
-  # filter( x -> imag(x) >= 0, ev)
-  ev = Complex{eltype(A)}[]
-  k = ilo
-  while k <= ihi
-    if k >= ihi || A[k+1,k] == 0
-      push!(ev, A[k,k])
-    else
-      r = ( A[k,k] + A[k+1,k+1] ) / 2
-      disc = discriminant(A, k, k + 1)
-      if disc < 0
-        push!(ev, r + sqrt(-disc)*im)
-      else
-        push!(ev, r + sqrt(disc))
-        push!(ev, r - sqrt(disc))
-      end
-      k += 1
-    end
-    k += 1
-  end
-  isreal(ev) ? real(ev) : ev
-end
-
 """
 Find last pair of eigenvalue blocks in Schur matrix diagonal.
 """
@@ -618,8 +428,8 @@ end
 
 """
 Perform swap on copy of small submatrix and check if spike vector is improved by the swap.
-Return true if last component of changed spike vector is small than before.
-and return range of transformation, changed small matrix, transformation matrix.
+Return true if last component of changed spike vector is smaller than before.
+and return range of transformation, changed small matrix, spike vector, transformation matrix.
 """
 function testswap(A::AbstractMatrix, spike::AbstractVector, ilo::Integer, iup::Integer)
   i1, n1, n2 = index_sizes(A, ilo, iup)
@@ -637,7 +447,7 @@ function testswap(A::AbstractMatrix, spike::AbstractVector, ilo::Integer, iup::I
 end
 
 """
-repeatedly swap adjacent eigenvalue blocks until no improvement of spike is found.
+Starting from end, repeatedly swap adjacent eigenvalue blocks until begin of diagonal.
 """
 function swap_sweep!(A::AbstractMatrix, ispike::Integer, ilo::Integer, ihi::Integer, Q::AbstractM)
   n = size(A, 2)
@@ -645,10 +455,11 @@ function swap_sweep!(A::AbstractMatrix, ispike::Integer, ilo::Integer, ihi::Inte
   ilo = max(ilo, ispike + 1)
   hic = 0
   loc = n + 1
+  # println("swap_sweep($ispike, $ilo:$ihi)")
   while i >= ilo
     res, ra, A2, spike2, R = testswap(A, A[:,ispike], ilo, i)
     # println("testswap($ilo,$i): $res $ra $spike2")
-    if res
+    if length(ra) > 0 || res 
       rb = last(ra)+1:n
       rn = 1:first(ra)-1
       A[ra,ispike] = spike2
@@ -680,7 +491,8 @@ function swap_sweep!(A::AbstractMatrix, ispike::Integer, ilo::Integer, ihi::Inte
       loc -= 1
     end
   end
-  loc, hic, A, Q
+  # loc, hic, A, Q
+  loc, loc-1, A, Q
 end
 
 
@@ -749,31 +561,6 @@ function eig2(A::AbstractMatrix)
     end
   end
 end
-
-"""
-Add missing multiplication to LinAlg.Rotation
-"""
-function A_mul_Bc!(R::LinAlg.Rotation, G::LinAlg.Givens)
-  insert!(R.rotations, 1, G')
-  R
-end
-
-function A_mul_B!{T<:Number,S<:Number}(A::AbstractMatrix{T}, R::LinAlg.Rotation{S})
-  n = length(R.rotations)
-  @inbounds for i = 1:n
-    A_mul_Bc!(A, R.rotations[n+1-i]')
-  end
-  A
-end
-
-function A_mul_B!(R::LinAlg.Rotation, A::AbstractVecOrMat)
-    @inbounds for i = 1:length(R.rotations)
-        A_mul_B!(R.rotations[i], A)
-    end 
-    return A
-end
-
-(*){T<:Number,S<:Number}(A::AbstractMatrix{T}, R::LinAlg.Rotation{S}) = A_mul_B!(copy(A), R)
 
 """
 Produce Givens Rotation, which transforms 2x2 matrix to another 2x2 matrix with
