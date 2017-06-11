@@ -74,3 +74,23 @@ function seigendiag{T}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer)
   isreal(ev) ? real(ev) : ev
 end
 
+"""
+Calculate vector of eigenvalues of a real 1x1 or 2x2 matrix A.
+If eigenvalue is complex, return one complex number with positive imaginary part.
+"""
+function eig2(A::AbstractMatrix)
+  n = size(A, 1)
+  if n == 1
+    [ A[1,1] ]
+  else
+    disc = discriminant(A, 1, 2)
+    re = (A[1,1] + A[2,2]) / 2
+    sq = sqrt(abs(disc))
+    if disc < 0
+      [ Complex(re, sq) ]
+    else
+      [ re - sq; re + sq ]
+    end
+  end
+end
+
