@@ -12,24 +12,24 @@ function iterate!{T<:BigFloat}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer,
 end
 
 """
-Refine all eigenvalues of alist close to estimation value
+Refine all eigenvalues of a list close to estimation value
 """
-function refineprecision!{T<:AbstractFloat}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, Q::AbstractM, ev::AbstractVector)
+function refineprecision!{T<:Union{Real,Complex}}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, Q::AbstractM, ev::AbstractVector)
   
-  ih2 = ihi
+  realcase = T <: Real
   for evk in reverse(ev)
-    evk2 = isreal(evk) ? T(evk) : Complex{T}(evk)
-    ih2 = refineprecision!(A, ilo, ih2, Q, evk)
+    evk2 = ! realcase || isreal(evk) ? T(evk) : Complex{T}(evk)
+    ihi = refineprecision!(A, ilo, ihi, Q, evk)
   end
-  ih2
+  ihi
 end
 
 """
 Refine one eigenvalue close to estimation value
 """
-function refineprecision!(A::AbstractMatrix, ilo::Integer, ihi::Integer, Q::AbstractM, ev::Number)
+function refineprecision!{T<:Union{Real,Complex}}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, Q::AbstractM, ev::Number)
  
-  ih2 = isreal(ev) ? ihi : max(ihi - 1, ilo)
+  ih2 = ! (T <: Real) || isreal(ev) ? ihi : max(ihi - 1, ilo)
   r = ih2:ihi
   while !converged(A, ilo, ihi)
     transform_Hess!(A, ilo, ihi, Q, [ev], ihi, 0)
@@ -45,14 +45,14 @@ end
 """
 Detect convergence of last eigenvalue block of hessenberg matrix.
 """
-function converged(A, ilo, ihi)
+function converged{T<:Union{Real,Complex}}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer)
   if ilo >= ihi
     return true
   end
   if deflation_criterion(A[ihi,ihi-1], A[ihi-1,ihi-1], A[ihi,ihi])
-      return true
+    return true
   end
-  if discriminant(A, ihi-1, ihi) > 0
+  if ! (T <: Real) || discriminant(A, ihi-1, ihi) > 0
     return false
   end
   if ilo >= ihi - 1

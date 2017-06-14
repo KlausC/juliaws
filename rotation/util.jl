@@ -47,7 +47,7 @@ Discriminant of 2 x 2 submatrix
 """
 Extract eigenvalues from quasi triangular matrix
 """
-function seigendiag{T}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer)
+function seigendiag{T<:Real}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer)
   # ev = eig(A[ilo:ihi,ilo:ihi])[1]  # TODO replace by specialized eig
   # filter( x -> imag(x) >= 0, ev)
   ev = Complex{eltype(A)}[]
@@ -71,6 +71,10 @@ function seigendiag{T}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer)
     end
     k += 1
   end
+  isreal(ev) ? real(ev) : ev
+end
+function seigendiag{T<:Complex}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer)
+  ev = diag(A[ilo:ihi,ilo:ihi])
   isreal(ev) ? real(ev) : ev
 end
 

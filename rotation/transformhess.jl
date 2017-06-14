@@ -6,18 +6,20 @@ shifts is a vector of shift values.
 With each shift value, its conjugate complex value is implicitly used as shift
 All shift values should be distinct.
 """
-function transform_Hess!{T<:Real, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, Q::AbstractM, s::Vector{S}, maxchase::Integer, iwindow::Integer)
+function transform_Hess!{T<:Union{Real,Complex}, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, ilo::Integer, ihi::Integer, Q::AbstractM, s::Vector{S}, maxchase::Integer, iwindow::Integer)
 
   !isa(Q, AbstractMatrix) || size(A, 2) == size(Q, 2) || error("A and Q have incompatible sizes")
 
   n = size(A, 1)
   z = zero(T)
   m = counteigs(s)
+  realcase = T <: Real
+  minn = ifelse(realcase, 2, 1)
   #println("def_sub ilo = $ilo ihi = $ihi")
   
   # supress further calculations if A is already quasi-diagonal
   isize = ihi - ilo + 1
-  if isize <= 1 || isize == 2 && discriminant(A, ilo, ihi) < z
+  if isize <= 1 || isize == minn && discriminant(A, ilo, ihi) < z
     m = 0
     maxchase = 0
   end
@@ -34,24 +36,7 @@ function transform_Hess!{T<:Real, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, 
     end
 
     # Second step: compute  prod(A-s(k))e1
-    pe = zeros(T, n)
-    pe[ilo] = one(T)
-    k = j = 1
-    while j <= m
-      sr = real(s[k])
-      si = imag(s[k])
-      if si == 0
-        pe = A * pe - sr * pe
-        j += 1
-      else
-        pe = A * ( A * pe - 2sr * pe) + ( hypot(sr, si) ^ 2 ) * pe
-        if k < length(s) && imag(s[k+1]) == -si
-          k += 1
-        end
-        j += 2
-      end
-      k += 1
-    end
+    pe = prode1(A, s, ilo)
 
     # Third step: set in new upper left bulge
     set_in!(A, ilo, Q, pe)
@@ -74,6 +59,41 @@ function transform_Hess!{T<:Real, S<:Union{Real,Complex}}(A::AbstractMatrix{T}, 
   #Q = LinAlg.Rotation(LinAlg.Givens{T}[])
   Q = eye(T, size(A, 2))
   transform_Hess!(A, Q, s, maxchase, iwindow)
+end
+
+# calculate product over k of (A - s[k]*I) * e1
+function prode1{T<:Real}(A::AbstractMatrix{T}, s::Vector, ilo::Integer)
+  n = size(A, 1)
+  pe = zeros(T, n)
+  pe[ilo] = one(T)
+  k = j = 1
+  while k <= length(s)
+    sr = real(s[k])
+    si = imag(s[k])
+    if si == 0
+      pe = A * pe - sr * pe
+      j += 1
+    else
+      pe = A * ( A * pe - 2sr * pe) + ( hypot(sr, si) ^ 2 ) * pe
+      if k < length(s) && imag(s[k+1]) == -si
+        k += 1
+      end
+      j += 2
+    end
+    k += 1
+  end
+  pe
+end
+
+function prode1{T<:Complex}(A::AbstractMatrix{T}, s::Vector, ilo::Integer)
+  n = size(A, 1)
+  pe = zeros(T, n)
+  pe[ilo] = one(T)
+  k = j = 1
+  for sk in s
+    pe = A * pe - sk * pe
+  end
+  pe
 end
 
 function set_in!(A::AbstractMatrix, ilo::Integer, Q::AbstractM, pe::Vector)

@@ -4,7 +4,7 @@ Module providing extensions of linalg to BigFloat and Complex{BigFloat}
 module LinAlgBF
 
 import Base.LinAlg
-import Base: A_mul_B!, Ac_mul_B!, A_mul_Bc!
+import Base: A_mul_B!, Ac_mul_B!, A_mul_Bc!, copymutable, full
 import Base.LinAlg: hessfact, hessfact!, Hessenberg, HessenbergQ
 import Base.LinAlg: chkstride1, checksquare
 
@@ -26,16 +26,19 @@ end
 hessfact!{T<:BigFloatOrComplex}(A::StridedMatrix{T}) = Hessenberg(A)
 hessfact{T<:BigFloatOrComplex}(A::StridedMatrix{T}) = hessfact!(copy(A))
 
-# mimic the corresponding LAPACK.gehrd! function
+# Perfom Householder/Hessenberg
+# The Householder matrices are unitary but not hermitian in the complex case
+# to provide real subdiagonal of the Hessenberg matrix.
+# mimic the corresponding LAPACK.gehrd! function.
 function gehrd!{T<:BigFloatOrComplex}(ilo::Integer, ihi::Integer, A::StridedMatrix{T})
   chkstride1(A)
   n = checksquare(A)
-  τ = zeros(T, max(0, n - 2))
+  τ = zeros(T, max(0, n - 1))
   
   ilo = max(ilo, 1)
   ihi = min(ihi, n)
 
-  for k = ilo:ihi-2
+  for k = ilo:ihi-1
     x = view(A, k+1:ihi, k)
     τk = reflector!(x)
     τ[k] = τk
@@ -46,7 +49,7 @@ function gehrd!{T<:BigFloatOrComplex}(ilo::Integer, ihi::Integer, A::StridedMatr
 end
 
 """
-Apply reflector from left or right.
+Apply reflector from left or right, analogous to linalg/generic.jl.
 """
 function reflectorApply!(A::StridedMatrix, x::AbstractVector, τ::Number)
   n, m = size(A)
@@ -73,13 +76,13 @@ function reflectorApply!(A::StridedMatrix, x::AbstractVector, τ::Number)
   return A
 end
 
-# Multiplication with HessenbergQ
-# note the ctranspose(τ[k]) - supports the unusual case of complex τ!
+# various multiplications with HessenbergQ
+# note the ctranspose(τ[k]) - supports the case of complex τ!
 function A_mul_B!{T<:BigFloatOrComplex}(HQ::HessenbergQ{T}, A::StridedVecOrMat{T})
   n = size(A, 1)
   τ = HQ.τ
   for k = length(τ):-1:1
-    τk = τ[k]
+    τk = τ[k]'
     if τk != 0
       x = view(HQ.factors, k+1:n, k)
       reflectorApply!(x, τk, view(A, k+1:n, :))
@@ -104,8 +107,8 @@ end
 function Ac_mul_B!{T<:BigFloatOrComplex}(HQ::HessenbergQ{T}, A::StridedVecOrMat{T})
   n = size(A, 1)
   τ = HQ.τ
-  for k = i:length(τ)
-    τk = τ[k]'
+  for k = 1:length(τ)
+    τk = τ[k]
     if τk != 0
       x = view(HQ.factors, k+1:n, k)
       reflectorApply!(x, τk, view(A, k+1:n, :))
@@ -127,6 +130,14 @@ function A_mul_Bc!{T<:BigFloatOrComplex}(A::StridedMatrix{T}, HQ::HessenbergQ{T}
   A
 end
 
+function copymutable(HQ::HessenbergQ)
+  Q = eye(HQ.factors)
+  A_mul_B!(HQ, Q)
+  Q
+end
+
+full(HQ::HessenbergQ) = copymutable(HQ)
+
 import Base.LinAlg.schurfact!
 import Base.getindex
 
@@ -147,6 +158,8 @@ function getindex(F::Schur, sym::Symbol)
     F.Z
   elseif sym == :values
     F.values
+  else
+    error("invalid key $(sym) for Schur")
   end
 end
 
