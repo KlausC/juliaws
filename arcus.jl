@@ -23,6 +23,7 @@ Multiplication and division only with `Real` values.
 module Arcus
 
 export Arc, Arcd, deg, rad, sincos
+
 import Base: convert, show, zero, bits
 import Base: sin, csc, cos, sec, tan, cot
 import Base: (+), (-), (*), (/)
